@@ -1,5 +1,4 @@
-﻿#pragma warning disable CS8500 // This takes the address of, gets the size of, or declares a pointer to a managed type
-unsafe partial class Terminal : IDisposable
+﻿unsafe partial class Terminal : IDisposable
 {
     public void ResetFormatting() => TerminalWriter.ResetFormatting(ref buffer);
 
@@ -13,11 +12,9 @@ unsafe partial class Terminal : IDisposable
 
     public void ResetBackground() => TerminalWriter.ResetBackground(ref buffer);
 
-    public void Write(char symbol)
-    {
-        TerminalWriter.Write(ref buffer, symbol);
-        EnsureCapacity();
-    }
+    public void Write(char symbol) => TerminalWriter.Write(ref buffer, symbol);
+
+    public void NewLine() => TerminalWriter.NewLine(ref buffer);
 
     public void Write(void* array, int length)
     {
@@ -52,12 +49,6 @@ unsafe partial class Terminal : IDisposable
     public void WriteChars(char* chars, int length)
     {
         TerminalWriter.WriteChars(ref buffer, chars, length);
-        EnsureCapacity();
-    }
-
-    public void NewLine()
-    {
-        TerminalWriter.NewLine(ref buffer);
         EnsureCapacity();
     }
 
@@ -100,6 +91,12 @@ unsafe partial class Terminal : IDisposable
     public void WritePointer(nint address, char type = '0')
     {
         TerminalWriter.WritePointer(ref buffer, address, type);
+        EnsureCapacity();
+    }
+
+    public void WriteBlanks(int count)
+    {
+        TerminalWriter.WriteBlanks(ref buffer, count);
         EnsureCapacity();
     }
 }

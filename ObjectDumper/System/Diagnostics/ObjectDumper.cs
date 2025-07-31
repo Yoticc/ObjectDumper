@@ -107,8 +107,9 @@ public unsafe static class ObjectDumper
             terminal.Write(" actualSize="u8);
             terminal.WritePointer((nint)actualObjectSize, 'h');
 
+            terminal.NewLine();
             terminal.SetForeground(TerminalColor.Gray);
-            terminal.Write("\n      0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F"u8);
+            terminal.Write("      0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F"u8);
 
             using (var objectSerialization = new ObjectSerializationContext(terminal, commentsBuffer, pobject, methodTable, eeClass))            
             {
@@ -127,7 +128,8 @@ public unsafe static class ObjectDumper
                     eeClass = methodTable->Class;
 
                     var totalFieldCount = eeClass->NumFields;
-                    if (totalFieldCount - pastTotalFieldsCount == 0)
+                    var fieldCount = totalFieldCount - pastTotalFieldsCount;
+                    if (fieldCount == 0)
                     {
                         objectSerialization.SkipNextMethodTable();
                         continue;
@@ -136,7 +138,6 @@ public unsafe static class ObjectDumper
                     var name = classNames[methodTableIndex];
                     objectSerialization.NotifyNextMethodTable(name);
 
-                    var fieldCount = totalFieldCount - pastTotalFieldsCount;
                     for (var fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++)
                     {
                         var field = eeClass->FieldDesc + fieldIndex;
@@ -157,8 +158,6 @@ public unsafe static class ObjectDumper
 
     struct ObjectSerializationContext : IDisposable
     {
-        static ReadOnlySpan<byte> EmptyStringBuffer => "                                                                                                                                "u8;
-
         public ObjectSerializationContext(Terminal terminal, byte* commentBuffer, nint pobject, MethodTable* methodTable, EEClass* eeClass)
         {
             this.pobject = (byte*)pobject;
@@ -183,6 +182,8 @@ public unsafe static class ObjectDumper
 
         public void NotifyObjectMethodTable()
         {
+            methodTableOrdinal++;
+
             if (eeClass->ObjectHeaderAndGCHeaderSize == 4/*reserved for gc*/ + 4/*sync block*/ + sizeof(nint)/*pmt*/)
             {
                 bodyPosition = -16;
@@ -190,7 +191,7 @@ public unsafe static class ObjectDumper
                 var syncblock = *(int*)&pobject[-4];
 
                 comment.AppendObjectTitle("Object");
-                AppendEmptyBytes(8);
+                AppendBlankBytes(8);
 
                 InternalAppendBytes(4, ByteDataType.Padding, $"gc_unused({gcUnused})");
                 InternalAppendBytes(4, ByteDataType.Value, $"syncblock({syncblock})");
@@ -201,8 +202,6 @@ public unsafe static class ObjectDumper
                 comment.AppendObjectTitle("Object");
                 InternalAppendBytes(8, ByteDataType.Value, $"MethodTable({(nint)methodTable:X}h)");
             }
-
-            methodTableOrdinal++;
         }
 
         public void NotifyNextMethodTable(string objectName)
@@ -225,15 +224,15 @@ public unsafe static class ObjectDumper
         public void AppendField(FieldDesc* field)
         {
             var size = field->GetSize();
-            var objectOffset = field->GetOffsetForObject();
             var offset = field->GetOffset();
+            var objectOffset = field->GetOffsetForObject();
             var pointer = (void*)(pobject + objectOffset);
             var comment = this.comment.GetFieldDescription(field, pointer, size);
 
             AppendBytes(offset, size, ByteDataType.Value, comment);
         }
                
-        public void AppendBytes(int position, int length, ByteDataType type, string comment)
+        void AppendBytes(int position, int length, ByteDataType type, string comment)
         {
             var padding = position - bodyPosition;
             if (padding > 0)
@@ -282,14 +281,14 @@ public unsafe static class ObjectDumper
             }
         }
 
-        public void AppendEmptyBytes(int length)
+        public void AppendBlankBytes(int length)
         {
             while (length > 0)
             {
                 var availableBytes = GetAvailableBytes();
                 var bytesToWrite = length <= availableBytes ? length : availableBytes;
-                var span = EmptyStringBuffer.Slice(0, bytesToWrite * 3 - 1);
-                terminal.Write(span);
+                var blanksToWrite = bytesToWrite * 3 - 1;
+                terminal.WriteBlanks(blanksToWrite);
                 bodyPosition += bytesToWrite;
 
                 length -= bytesToWrite;
@@ -311,7 +310,7 @@ public unsafe static class ObjectDumper
                 var inLineBytes = bodyPosition < 0 ? Math.Abs(bodyPosition % 16) : bodyPosition & 15;
                 var bytesToWrite = 16 - inLineBytes;
 
-                AppendEmptyBytes(bytesToWrite);
+                AppendBlankBytes(bytesToWrite);
 
                 comment.Push();
             }

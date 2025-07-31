@@ -6,21 +6,23 @@ unsafe static class TerminalWriter
     #region Formatting
     public static void ResetFormatting(ref byte* buffer) => SetStyle(ref buffer, TerminalStyle.Reset);
 
-    public static void SetStyle(ref byte* buffer, TerminalStyle style)
+    public static void SetStyle(ref byte* buffer, TerminalStyle style) => SetStyle(ref buffer, (int)style);
+
+    static void SetStyle(ref byte* buffer, int style)
     {
-        *(int*)buffer = '\e' | '[' << 8 | '0' + (byte)style << 16 | 'm' << 24;
+        *(int*)buffer = '\e' | '[' << 8 | '0' + style << 16 | 'm' << 24;
         buffer += 4;
     }
 
-    public static void SetForeground(ref byte* buffer, TerminalColor foreground) => Color(ref buffer, (uint)foreground);
+    public static void SetForeground(ref byte* buffer, TerminalColor foreground) => WriteTag(ref buffer, (uint)foreground);
 
-    public static void ResetForeground(ref byte* buffer) => Color(ref buffer, 39); 
+    public static void ResetForeground(ref byte* buffer) => WriteTag(ref buffer, 39); 
 
-    public static void SetBackground(ref byte* buffer, TerminalColor background) => Color(ref buffer, (uint)background + 10);
+    public static void SetBackground(ref byte* buffer, TerminalColor background) => WriteTag(ref buffer, (uint)background + 10);
 
-    public static void ResetBackground(ref byte* buffer) => Color(ref buffer, 49);
+    public static void ResetBackground(ref byte* buffer) => WriteTag(ref buffer, 49);
 
-    static void Color(ref byte* buffer, uint colorTag)
+    static void WriteTag(ref byte* buffer, uint tag)
     {
         long value = 'm';
         var chars = 3;
@@ -28,10 +30,10 @@ unsafe static class TerminalWriter
         do
         {
             chars++;
-            (colorTag, var reminder) = Math.DivRem(colorTag, 10);
+            (tag, var reminder) = Math.DivRem(tag, 10);
             value = (value << 8) | '0' + reminder;
         }
-        while (colorTag > 0);
+        while (tag > 0);
 
         *(long*)buffer = (value << 8 | '[') << 8 | '\e';
         buffer += chars;
@@ -120,7 +122,6 @@ unsafe static class TerminalWriter
         }
     }
 
-
     public static void WriteHexByteArray(ref byte* buffer, byte* array, int length)
     {
         for (var longIndex = 0; longIndex < length; longIndex += 8)
@@ -176,6 +177,21 @@ unsafe static class TerminalWriter
         {
             WriteHexInteger(ref buffer, (ulong)address);
             Write(ref buffer, 'h');
+        }
+    }
+
+    public static void WriteBlanks(ref byte* buffer, int count)
+    {
+        var blanks = "                                                                                                                                "u8;
+
+        while (count > 0)
+        {
+            var bytesToWrite = Math.Min(count, blanks.Length);
+
+            var slicedBlanks = blanks.Slice(0, bytesToWrite);
+            Write(ref buffer, slicedBlanks);
+
+            count -= bytesToWrite;
         }
     }
 
