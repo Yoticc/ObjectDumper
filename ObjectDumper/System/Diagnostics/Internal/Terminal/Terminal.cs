@@ -2,15 +2,17 @@
 using System.Runtime.InteropServices;
 using System.Text;
 
+#pragma warning disable CS8500 // This takes the address of, gets the size of, or declares a pointer to a managed type
 unsafe partial class Terminal : IDisposable
 {
+    const int BufferCapacity = 1 << 15;
+
     public Terminal()
     {
         consoleHandle = GetConsoleOutHandle();
         PreserveConsoleOptions();
         SetupConsoleOptions();
-
-        buffer = new Utf8StringBuilder();
+        AllocateBuffer();
     }
 
     nint consoleHandle;
@@ -18,101 +20,35 @@ unsafe partial class Terminal : IDisposable
     uint previousConsoleMode;
     [AllowNull] Encoding previousConsoleEncoding;
 
-    Utf8StringBuilder buffer;
+    byte* initialBuffer;
+    byte* buffer;
+    int bufferLength => (int)(buffer - initialBuffer);
 
-    public Terminal Write(char symbol) => Write((byte)symbol);
-
-    public Terminal Write(byte symbol)
+    void EnsureCapacity()
     {
-        buffer.Append(symbol);
-        return this;
+        const int LengthThreshold = BufferCapacity - 256;
+
+        if ((uint)bufferLength > LengthThreshold)
+            FlushNoChecks();
     }
-
-    public Terminal Write(Span<byte> text)
-    {
-        buffer.Append(text);
-        return this;
-    }
-
-    public Terminal Write(ReadOnlySpan<byte> text)
-    {
-        buffer.Append(text);
-        return this;
-    }
-
-    public Terminal Write(string text)
-    {
-        var bytes = Encoding.UTF8.GetBytes(text);
-        fixed (byte* pointer = bytes)
-        {
-            var span = new ReadOnlySpan<byte>(pointer, bytes.Length);
-            return Write(span);
-        }
-    }
-
-    public Terminal WriteInteger(long value)
-    {
-        var stack = stackalloc byte[16];
-        var span = FormatInteger(stack, value);
-        Write(span);
-
-        return this;
-    }
-
-    Span<byte> FormatInteger(byte* input, long value)
-    {
-        const int MaxLength = 8;
-
-        var pointer = input + MaxLength;
-        do
-        {
-            *--pointer = (byte)(value % 10 + (byte)'0');
-            value /= 10;
-        } while (value != 0);
-
-        var left = (int)(pointer - input);
-        input += left;
-        var length = MaxLength - left;
-        var span = new Span<byte>(input, length);
-
-        return span;
-    }
-
-    public Terminal ClearStyle() => Write("\e[0m");
-
-    public Terminal Style(ConsoleTextStyles styles)
-    {
-        Write("\e[0"u8);
-
-        var stylesValue = styles.Value;
-        long value;
-
-        var stack = stackalloc byte[32];
-        for (var shift = 0; shift < 64; shift += 8)
-            if ((value = stylesValue >> shift & 0xFF) != 0)
-            {
-                Write(';');
-                Write(FormatInteger(stack, value));
-            }
-
-        Write('m');
-
-        return this;
-    }
-
-    public Terminal NewLine() => Write("\n"u8);
 
     public void Flush()
     {
-        var iterator = buffer.GetIterator();
+        if (bufferLength == 0)
+            return;
 
-        while (iterator.Next(out var span))
-            fixed (byte* buffer = span)
-                WriteConsoleA(consoleHandle, buffer, span.Length, null, null);
-
-        buffer.Dispose();
-        buffer = new Utf8StringBuilder();
+        FlushNoChecks();
     }
+
+    void FlushNoChecks()
+    {
+        WriteConsoleA(consoleHandle, initialBuffer, bufferLength, null, null);
+        buffer = initialBuffer;
+    }
+
+    void AllocateBuffer() => buffer = initialBuffer = (byte*)Marshal.AllocCoTaskMem(BufferCapacity);
+
+    void FreeBuffer() => Marshal.FreeCoTaskMem((nint)initialBuffer);
 
     void SetupConsoleOptions()
     {
@@ -136,8 +72,13 @@ unsafe partial class Terminal : IDisposable
 
     uint ConsoleMode { get => GetConsoleMode(consoleHandle); set => SetConsoleMode(consoleHandle, value); }
 
-    public void Dispose() => RestoreConsoleOptions();
-    
+    public void Dispose()
+    {
+        Flush();
+        FreeBuffer();
+        RestoreConsoleOptions();
+    }
+
     const string kernel = "kernel32";
 
     [LibraryImport(kernel)] 

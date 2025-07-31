@@ -1,7 +1,7 @@
 ﻿using System.Diagnostics;
 
 var @object = new A();
-LayoutVerifier.Verify(@object);
+ObjectDumper.DumpObject(@object);
 Console.ReadLine();
 
 class A_
@@ -32,4 +32,5 @@ struct C
 
     public int XValue = 10;
     public int YValue = 20;
+    public long XYValue = 30;
 }

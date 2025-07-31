@@ -1,6 +1,5 @@
-﻿enum ConsoleForegroundColor : byte
+﻿enum TerminalColor : byte
 {
-    None        = 00,
     Black       = 30,
     DarkBlue    = 34,
     DarkGreen   = 32,
