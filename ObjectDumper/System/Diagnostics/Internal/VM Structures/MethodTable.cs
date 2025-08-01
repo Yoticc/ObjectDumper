@@ -22,8 +22,6 @@ unsafe struct MethodTable
     {
         var self = Unsafe.AsPointer(ref this);
         var managedType = Type.GetTypeFromHandle(RuntimeTypeHandle.FromIntPtr((nint)self));
-        if (managedType is not null)
-            return managedType.Name;
-        else return "<<EMPTY_NAME>>";
+        return managedType is not null ? managedType.Name : "<<EMPTY_NAME>>";
     }
 }

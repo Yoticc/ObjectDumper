@@ -26,8 +26,7 @@
     public CorElementType CorElementType => (CorElementType)normType;
     public int NumFields => numInstanceFields;
     public int NumStaticFields => numStaticFields;
-    public int ObjectHeaderAndGCHeaderSize => baseSizePadding;
-    public uint ObjectHeaderSize => IsValueType ? 0U : (uint)sizeof(nint);
+    public int BaseSizePadding => baseSizePadding;
 
     public bool IsArray => CorElementType is CorElementType.Array or CorElementType.SZArray;
     public bool IsValueType => CorElementType is CorElementType.ValueType;

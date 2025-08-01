@@ -13,38 +13,21 @@ unsafe class PinnedObjectCollection : IDisposable
 
     public nint this[int index] => objects[index];
 
-    public int TryAddObject(object @object)
+    public int AddObject(object @object)
     {
         var pobject = *(nint*)&@object;
-        var index = GetObjectIndex(pobject);
 
-        if (index == -1)
-        {
-            index = Count;
-            AddObject(@object);
-        }
+        for (var index = 0; index < objects.Count; index++)
+            if (objects[index] == pobject)
+                return index;
 
-        return index;
-    }
-
-    public void AddObject(object @object)
-    {
         var handle = InternalAlloc(@object, GCHandleType.Pinned);
         handles.Add(*(GCHandle*)&handle);
 
-        var pobject = *(nint*)&@object;
+        pobject = *(nint*)&@object;
         objects.Add(pobject);
-    }
 
-    public int GetObjectIndex(nint @object)
-    {
-        var objects = this.objects;
-        var objectsCount = objects.Count;
-        for (var index = 0; index < objectsCount; index++)
-            if (objects[index] == @object)
-                return index;
-
-        return -1;
+        return objects.Count - 1;
     }
 
     public void Dispose()

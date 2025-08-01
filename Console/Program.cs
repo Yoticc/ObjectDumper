@@ -1,7 +1,9 @@
 ﻿using System.Diagnostics;
 
-var @object = new A();
-ObjectDumper.DumpObject(@object);
+ObjectDumper.DumpObject(new A());
+ObjectDumper.DumpType<A>();
+ObjectDumper.DumpObject(new C());
+ObjectDumper.DumpValueType(new C());
 Console.ReadLine();
 
 class A_

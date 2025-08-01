@@ -10,7 +10,7 @@ unsafe static class TerminalWriter
 
     static void SetStyle(ref byte* buffer, int style)
     {
-        *(int*)buffer = '\e' | '[' << 8 | '0' + style << 16 | 'm' << 24;
+        *(int*)buffer = 0x1B/*'\e'*/ | '[' << 8 | '0' + style << 16 | 'm' << 24;
         buffer += 4;
     }
 
@@ -35,7 +35,7 @@ unsafe static class TerminalWriter
         }
         while (tag > 0);
 
-        *(long*)buffer = (value << 8 | '[') << 8 | '\e';
+        *(long*)buffer = (value << 8 | '[') << 8 | 0x1B/*'\e'*/;
         buffer += chars;
     }
     #endregion
@@ -124,45 +124,17 @@ unsafe static class TerminalWriter
 
     public static void WriteHexByteArray(ref byte* buffer, byte* array, int length)
     {
-        for (var longIndex = 0; longIndex < length; longIndex += 8)
+        for (var index = 0; index < length; index++)
         {
-            var byteLength = length - longIndex;
-            if (byteLength > 8)
-                byteLength = 8;
+            var digit = array[index];
+            var lowDigit = digit & 0x0F;
+            var highDigit = (digit >> 4) & 0x0F;
 
-            var longValue = *(ulong*)&array[longIndex];
-            for (var byteIndex = 0; byteIndex < byteLength; byteIndex++)
-            {
-                var outputValue = 0;
-                var isNotEndLine = byteIndex != byteLength - 1;
+            *buffer++ = (byte)(highDigit > 9 ? 'A' - 10 + highDigit : '0' + highDigit);
+            *buffer++ = (byte)(lowDigit > 9 ? 'A' - 10 + lowDigit : '0' + lowDigit);
 
-                if (isNotEndLine)
-                {
-                    outputValue |= ' ';
-                    outputValue <<= 8;
-                }
-
-                var lowDigit = (int)(longValue & 0x0F);
-                longValue >>= 4;
-
-                if (lowDigit > 9)
-                    outputValue |= 'A' - 10 + lowDigit;
-                else outputValue |= '0' + lowDigit;
-                outputValue <<= 8;
-
-                var highDigit = (int)(longValue & 0x0F);
-                longValue >>= 4;
-
-                if (highDigit > 9)
-                    outputValue |= 'A' - 10 + highDigit;
-                else outputValue |= '0' + highDigit;
-
-                *(int*)buffer = outputValue;
-
-                if (isNotEndLine)
-                    buffer += 3;
-                else buffer += 2;
-            }
+            if (index != length - 1)
+                *buffer++ = (byte)' ';
         }
     }
 

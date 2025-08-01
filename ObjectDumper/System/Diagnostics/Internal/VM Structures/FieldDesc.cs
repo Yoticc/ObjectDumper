@@ -10,8 +10,6 @@ unsafe struct FieldDesc
 
     public int RID => dword1 & (1 << 24) - 1;
     public bool IsStatic => (dword1 & 1 << 24) > 0;
-    public bool IsThreadLocal => (dword1 & 1 << 25) > 0;
-    public bool IsRVA => (dword1 & 1 << 26) > 0;
     public int Protection => (dword2 >> 3) & (1 << 3) - 1;
 
     public int Offset => dword2 & (1 << 21) - 1;
@@ -22,7 +20,7 @@ unsafe struct FieldDesc
 
 static unsafe class FieldDescExtensions
 {
-    public static int GetOffset(this FieldDesc self) => self.Type == CorElementType.ValueType ? self.GetOffsetForValueType() : self.GetOffsetForObject();
+    public static int GetOffset(this FieldDesc self, bool isValueType) => isValueType/*self.DefinedType->Class->IsValueType*/ ? self.GetOffsetForValueType() : self.GetOffsetForObject();
 
     public static int GetOffsetForObject(this FieldDesc self) => self.Offset + sizeof(nint);
 
@@ -48,7 +46,7 @@ static unsafe class FieldDescExtensions
             var methodTable = (MethodTable*)managedFieldTypeHandle.Value;
             var eeClass = methodTable->Class;
 
-            size = (int)methodTable->BaseSize - eeClass->ObjectHeaderAndGCHeaderSize;
+            size = (int)methodTable->BaseSize - eeClass->BaseSizePadding;
         }
         else
         {

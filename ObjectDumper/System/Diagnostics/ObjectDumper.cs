@@ -1,15 +1,16 @@
-﻿using System.Reflection;
+﻿using Microsoft.VisualBasic;
+using System.Diagnostics.Metrics;
+using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
+using System.Runtime.InteropServices;
 
 #pragma warning disable CS8500 // This takes the address of, gets the size of, or declares a pointer to a managed type
 #pragma warning disable CA2265 // Do not compare Span<T> to 'null' or 'default'
 namespace System.Diagnostics;
 public unsafe static class ObjectDumper
 {
-    static ObjectDumper() => TheObjectMethodTable = (MethodTable*)typeof(object).TypeHandle.Value;
-
-    static MethodTable* TheObjectMethodTable;
+    static MethodTable* TheObjectMethodTable = (MethodTable*)typeof(object).TypeHandle.Value;
+    static MethodTable* TheStringMethodTable = (MethodTable*)typeof(string).TypeHandle.Value;
 
     static void PerformDump(Action<Terminal> dumpAction)
     {
@@ -18,7 +19,7 @@ public unsafe static class ObjectDumper
         stopwatch.Start();
 
         terminal.SetForeground(TerminalColor.Gray);
-        terminal.Write("======================= Dump =======================\n\n"u8);
+        terminal.Write("======================= Dump ========================\n\n"u8);
         terminal.ResetForeground();
 
         dumpAction(terminal);
@@ -34,11 +35,69 @@ public unsafe static class ObjectDumper
 
     public static void DumpType<T>() => DumpType(typeof(T));
 
-    public static void DumpType(Type type)
+    public static void DumpType(Type type) => DumpObject(RuntimeHelpers.GetUninitializedObject(type));
+    
+    public static void DumpValueType<TStruct>(TStruct value) where TStruct : struct
     {
-        var typeHandle = type.TypeHandle.Value;
-        var methodTable = (MethodTable*)typeHandle;
-        PerformDump(terminal => InternalDumpType(terminal, methodTable));
+        var pointer = (nint)(&value);
+        var methodTable = (MethodTable*)typeof(TStruct).TypeHandle.Value;
+        PerformDump(terminal => InternalDumpValueType(terminal, pointer, methodTable));
+    }
+
+    static void InternalDumpValueType(Terminal terminal, nint pointer, MethodTable* methodTable)
+    {
+        var commentsBuffer = stackalloc byte[512];
+
+        var eeClass = methodTable->Class;
+        var name = methodTable->GetName();
+        var size = methodTable->BaseSize - eeClass->BaseSizePadding - sizeof(nint);
+
+        terminal.Write("#000  "u8);
+        terminal.SetStyle(TerminalStyle.Inverse);
+        terminal.WriteString(name);
+        terminal.ResetFormatting();
+        terminal.NewLine();
+        terminal.WritePointer(pointer);
+        terminal.Write(" size="u8);
+        terminal.WritePointer((nint)size, 'h');
+        terminal.NewLine();
+
+        using (var objectSerialization = new ObjectSerializationContext(terminal, commentsBuffer, pointer, methodTable, eeClass))
+        {
+            objectSerialization.SkipNextMethodTable();
+
+            var fieldCount = eeClass->NumFields;
+
+            FieldDesc* bestField;
+            var lastOffset = -1;
+            int bestOffset;
+            while (true)
+            {
+                bestOffset = int.MaxValue;
+                bestField = null;
+
+                for (var fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++)
+                {
+                    var field = eeClass->FieldDesc + fieldIndex;
+                    var offset = field->Offset;
+
+                    if (offset > lastOffset && bestOffset > offset)
+                    {
+                        bestOffset = offset;
+                        bestField = field;
+                    }
+                }
+
+                if (bestField is null)
+                    break;
+
+                lastOffset = bestField->Offset;
+
+                objectSerialization.AppendField(bestField, isValueType: true);
+            }
+        }
+
+        terminal.NewLine();
     }
 
     public static void DumpObject(object @object)
@@ -48,16 +107,11 @@ public unsafe static class ObjectDumper
         PerformDump(terminal => InternalDumpObject(terminal, objectCollection));
     }
 
-    static void InternalDumpType(Terminal terminal, MethodTable* methodTable)
-    {
-        
-    }
-
     [SkipLocalsInit]
     static void InternalDumpObject(Terminal terminal, PinnedObjectCollection objects)
     {
-        var classNames = new string[256];
-        var methodTables = stackalloc MethodTable*[256];
+        var classNames = new string[64];
+        var methodTables = stackalloc MethodTable*[64];
         var commentsBuffer = stackalloc byte[512];
 
         for (var objectIndex = 0; objectIndex < objects.Count; objectIndex++)
@@ -66,7 +120,7 @@ public unsafe static class ObjectDumper
             var methodTable = *(MethodTable**)pobject;
             var eeClass = methodTable->Class;
             var actualObjectSize = methodTable->BaseSize;
-            var objectSize = actualObjectSize - eeClass->ObjectHeaderAndGCHeaderSize;
+            var objectSize = actualObjectSize - eeClass->BaseSizePadding;
 
             terminal.Write('#');
             terminal.WriteUnsignedIntegerWithLeadingZero((uint)objectIndex, 3);
@@ -83,7 +137,7 @@ public unsafe static class ObjectDumper
 
             for (var methodTableIndex = 0; methodTableIndex < methodTablesCount; methodTableIndex++)
             {
-                if ((methodTablesCount - methodTableIndex) % 2 == 0)
+                if ((methodTablesCount - 1 - methodTableIndex) % 2 == 0)
                     terminal.SetStyle(TerminalStyle.Inverse);
                 else terminal.SetBackground(TerminalColor.Black);
 
@@ -104,12 +158,14 @@ public unsafe static class ObjectDumper
             terminal.WritePointer(pobject);
             terminal.Write(" size="u8);
             terminal.WritePointer((nint)objectSize, 'h');
-            terminal.Write(" actualSize="u8);
-            terminal.WritePointer((nint)actualObjectSize, 'h');
+
+            if (objectSize != actualObjectSize)
+            {
+                terminal.Write(" actualSize="u8);
+                terminal.WritePointer((nint)actualObjectSize, 'h');
+            }
 
             terminal.NewLine();
-            terminal.SetForeground(TerminalColor.Gray);
-            terminal.Write("      0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F"u8);
 
             using (var objectSerialization = new ObjectSerializationContext(terminal, commentsBuffer, pobject, methodTable, eeClass))            
             {
@@ -138,21 +194,78 @@ public unsafe static class ObjectDumper
                     var name = classNames[methodTableIndex];
                     objectSerialization.NotifyNextMethodTable(name);
 
+                    var firstField = eeClass->FieldDesc;
                     for (var fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++)
                     {
                         var field = eeClass->FieldDesc + fieldIndex;
-                        objectSerialization.AppendField(field);
+                        var offset = field->Offset;
 
-                        if (field->Type == CorElementType.Class)
+                        if (firstField->Offset > offset)
+                            firstField = field;                   
+                    }
+
+                    FieldDesc* bestField;
+                    var lastOffset = -1;
+                    int bestOffset;
+                    while (true)
+                    {
+                        bestOffset = int.MaxValue;
+                        bestField = null;
+
+                        for (var fieldIndex = 0; fieldIndex < fieldCount; fieldIndex++)
                         {
-                            var @object = *(object*)(pobject + field->GetOffsetForObject());
-                            objects.TryAddObject(@object);
+                            var field = eeClass->FieldDesc + fieldIndex;
+                            var offset = field->Offset;
+
+                            if (offset > lastOffset && bestOffset > offset)
+                            {
+                                bestOffset = offset;
+                                bestField = field;
+                            }
+                        }
+
+                        if (bestField is null)
+                            break;
+
+                        lastOffset = bestField->Offset;
+
+                        objectSerialization.AppendField(bestField, isValueType: false);
+
+                        if (bestField->Type == CorElementType.Class)
+                        {
+                            var @object = *(object*)(pobject + bestField->GetOffsetForObject());
+
+                            if (@object is not null)
+                                objects.AddObject(@object);
                         }
                     }
 
                     pastTotalFieldsCount = totalFieldCount;
                 }
             }
+
+            methodTable = *methodTables;
+            if (methodTable == TheStringMethodTable)
+            {
+                var @string = *(string*)&pobject;
+                @string = $"\"{@string}\"";
+
+                fixed (char* chars = @string)
+                {
+                    var length = @string.Length;
+                    var remindLength = length;
+                    while (remindLength > 0)
+                    {
+                        var bytesToWrite = Math.Min(remindLength, 53);
+                        terminal.WriteChars(chars + (length - remindLength), bytesToWrite);
+                        remindLength -= bytesToWrite;
+
+                        terminal.NewLine();
+                    }
+                }
+            }
+
+            terminal.NewLine();
         }
     }
 
@@ -166,9 +279,6 @@ public unsafe static class ObjectDumper
             this.terminal = terminal;
 
             comment = new Comment(terminal, commentBuffer);
-
-            if (eeClass->IsValueType)
-                pobject += sizeof(nint);
         }
 
         Terminal terminal;
@@ -178,99 +288,115 @@ public unsafe static class ObjectDumper
         EEClass* eeClass;
         int bodyPosition;
         int methodTableOrdinal = -1;
-        bool hasRecord;
+        State state = State.EmptyLine;
+
+        int bytesInLine => bodyPosition < 0 ? (16 - -bodyPosition) & 15 : bodyPosition & 15;
+        int bytesIsAvailable => 16 - bytesInLine;
 
         public void NotifyObjectMethodTable()
         {
             methodTableOrdinal++;
 
-            if (eeClass->ObjectHeaderAndGCHeaderSize == 4/*reserved for gc*/ + 4/*sync block*/ + sizeof(nint)/*pmt*/)
+            var expectedObjectHeaderSize = 4/*reserved for gc*/ + 4/*sync block or hashcode*/ + sizeof(nint)/*pmt*/;
+            if (eeClass->BaseSizePadding == expectedObjectHeaderSize)
             {
                 bodyPosition = -16;
                 var gcUnused = *(int*)&pobject[-8];
                 var syncblock = *(int*)&pobject[-4];
 
-                comment.AppendObjectTitle("Object");
+                AppendObjectTitle("Object");
                 AppendBlankBytes(8);
 
-                InternalAppendBytes(4, ByteDataType.Padding, $"gc_unused({gcUnused})");
-                InternalAppendBytes(4, ByteDataType.Value, $"syncblock({syncblock})");
-                InternalAppendBytes(8, ByteDataType.Value, $"MethodTable({(nint)methodTable:X}h)");
+                AppendBytes(4, BytesDataType.Padding, $"gc_unused({gcUnused})");
+                AppendBytes(4, BytesDataType.Value, $"syncblock({syncblock})");
+                AppendBytes(8, BytesDataType.Value, $"MethodTable({(nint)methodTable:X}h)");
             }
             else
             {
-                comment.AppendObjectTitle("Object");
-                InternalAppendBytes(8, ByteDataType.Value, $"MethodTable({(nint)methodTable:X}h)");
+                AppendObjectTitle("Object");
+                AppendBytes(8, BytesDataType.Value, $"MethodTable({(nint)methodTable:X}h)");
             }
         }
 
         public void NotifyNextMethodTable(string objectName)
         {
             methodTableOrdinal++;
-            comment.AppendObjectTitle(objectName);
+            AppendObjectTitle(objectName);
         }
 
         public void SkipNextMethodTable() => methodTableOrdinal++;
 
-        void PrepareFormatting(ByteDataType type)
+        void EnsureState()
         {
-            terminal.SetForeground(type.GetTerminalForegroundColor());
-
-            if (methodTableOrdinal % 2 == 0)
-                terminal.SetStyle(TerminalStyle.Inverse);
-            else terminal.SetBackground(TerminalColor.Black);
+            if (state == State.EmptyLine)
+            {
+                WriteAddressLabel();
+                state = State.HasLabel;
+            }
+            else if (state == State.FullLine)
+            {
+                comment.Push();
+                terminal.NewLine();
+                WriteAddressLabel();
+                state = State.HasLabel;
+            }
         }
 
-        public void AppendField(FieldDesc* field)
+        void AppendObjectTitle(string objectTitle)
+        {
+            EnsureState();
+            comment.AppendObjectTitle(objectTitle);
+        }
+
+        void AppendComment(string commentText, BytesDataType type, int ordinal)
+        {
+            EnsureState();
+            comment.AppendDescription(commentText, type, ordinal);
+        }
+
+        public void AppendField(FieldDesc* field, bool isValueType)
         {
             var size = field->GetSize();
-            var offset = field->GetOffset();
+            var offset = field->GetOffset(isValueType);
             var objectOffset = field->GetOffsetForObject();
             var pointer = (void*)(pobject + objectOffset);
             var comment = this.comment.GetFieldDescription(field, pointer, size);
 
-            AppendBytes(offset, size, ByteDataType.Value, comment);
+            CheckPaddingsAndAppendBytes(offset, size, BytesDataType.Value, comment);
         }
-               
-        void AppendBytes(int position, int length, ByteDataType type, string comment)
+
+        void EnsurePadding(int position)
         {
             var padding = position - bodyPosition;
             if (padding > 0)
-                InternalAppendBytes(padding, ByteDataType.Padding, $"padding[{padding}]");
-
-            InternalAppendBytes(length, type, comment);
+                AppendBytes(padding, BytesDataType.Padding, $"padding[{padding}]");
         }
 
-        int GetAvailableBytes()
+        void CheckPaddingsAndAppendBytes(int position, int length, BytesDataType type, string comment)
         {
-            var inLineBytes = bodyPosition < 0 ? Math.Abs(bodyPosition % 16) : bodyPosition & 15;
-            
-            if (inLineBytes == 0)
-            {
-                if (hasRecord)
-                    comment.Push();
-
-                terminal.Write('\n');
-                WriteAddressLabel();
-            }
-            else terminal.Write(' ');
-
-            if (!hasRecord)
-                hasRecord = true;
-
-            return 16 - inLineBytes;
+            EnsurePadding(position);
+            AppendBytes(length, type, comment);
         }
 
-        void InternalAppendBytes(int length, ByteDataType type, string comment)
+        void AppendBytes(int length, BytesDataType type, string comment)
         {
-            this.comment.AppendComment(comment, type, methodTableOrdinal);
+            AppendComment(comment, type, methodTableOrdinal);
 
             while (length > 0)
             {
-                var availableBytes = GetAvailableBytes();
-                var bytesToWrite = length <= availableBytes ? length : availableBytes;
+                EnsureState();
+                if (state != State.HasLabel)
+                    terminal.Write(' ');
 
-                PrepareFormatting(type);
+                var availableBytes = bytesIsAvailable;
+                var isAllBytes = length >= availableBytes;
+                var bytesToWrite = isAllBytes ? availableBytes : length;
+
+                terminal.SetForeground((TerminalColor)type);
+
+                if (methodTableOrdinal % 2 == 0)
+                    terminal.SetStyle(TerminalStyle.Inverse);
+                else terminal.SetBackground(TerminalColor.Black);
 
                 terminal.WriteHexByteArray(pobject + bodyPosition, bytesToWrite);
                 bodyPosition += bytesToWrite;
@@ -278,6 +404,7 @@ public unsafe static class ObjectDumper
                 terminal.ResetFormatting();
 
                 length -= bytesToWrite;
+                state = isAllBytes ? State.FullLine : State.NotEmpty;
             }
         }
 
@@ -285,13 +412,20 @@ public unsafe static class ObjectDumper
         {
             while (length > 0)
             {
-                var availableBytes = GetAvailableBytes();
-                var bytesToWrite = length <= availableBytes ? length : availableBytes;
+                EnsureState();
+                if (state != State.HasLabel)
+                    terminal.Write(' ');
+
+                var availableBytes = bytesIsAvailable;
+                var isAllBytes = length >= availableBytes;
+                var bytesToWrite = isAllBytes ? availableBytes : length;
                 var blanksToWrite = bytesToWrite * 3 - 1;
+
                 terminal.WriteBlanks(blanksToWrite);
                 bodyPosition += bytesToWrite;
 
                 length -= bytesToWrite;
+                state = isAllBytes ? State.FullLine : State.NotEmpty;
             }
         }
 
@@ -305,17 +439,20 @@ public unsafe static class ObjectDumper
 
         public void Dispose()
         {
-            if (comment.Length > 0)
+            var size = (int)methodTable->BaseSize - eeClass->BaseSizePadding;
+            if (!eeClass->IsValueType)
+                size += sizeof(nint);
+
+            EnsurePadding(size);
+
+            if (comment.HasContent())
             {
-                var inLineBytes = bodyPosition < 0 ? Math.Abs(bodyPosition % 16) : bodyPosition & 15;
-                var bytesToWrite = 16 - inLineBytes;
-
-                AppendBlankBytes(bytesToWrite);
-
-                comment.Push();
+                if (state != State.FullLine)
+                    AppendBlankBytes(bytesIsAvailable);
+                comment.PushNoChecks();
             }
 
-            terminal.Write("\n\n"u8);
+            terminal.NewLine();
         }
 
         struct Comment
@@ -329,57 +466,70 @@ public unsafe static class ObjectDumper
             Terminal terminal;
             byte* initialBuffer;
             public byte* buffer;
+            int length => (int)(buffer - initialBuffer);
 
-            public int Length => (int)(buffer - initialBuffer);
+            public bool HasContent() => length != 0;
 
             public void Push()
             {
-                var length = Length;
-                if (length > 0)
-                {
-                    terminal.Write("  "u8);
-                    terminal.Write(initialBuffer, length);
-
-                    buffer = initialBuffer;
-                }
+                if (HasContent())
+                    PushNoChecks();
             }
 
-            public string GetFieldDescription(FieldDesc* field, void* pointer, int size)
+            public void PushNoChecks()
+            {
+                terminal.Write("  "u8);
+                terminal.Write(initialBuffer, length);
+
+                buffer = initialBuffer;
+            }
+
+            public string GetFieldDescription(FieldDesc* field, void* pvalue, int size)
             {
                 var pmd = field->DefinedType;
                 var definedTypeHandle = RuntimeTypeHandle.FromIntPtr((nint)pmd);
                 var module = definedTypeHandle.GetModuleHandle();
                 var managedFieldHandle = module.ResolveFieldHandle(field->Token);
                 var managedField = FieldInfo.GetFieldFromHandle(managedFieldHandle);
+                var managedType = managedField.FieldType;
 
                 var name = managedField.Name;
-                string value = field->Type switch
+                var value = field->Type switch
                 {
-                    CorElementType.I1 => (*(sbyte*)pointer).ToString(),
-                    CorElementType.U1 => (*(byte*)pointer).ToString(),
-                    CorElementType.I2 => (*(short*)pointer).ToString(),
-                    CorElementType.U2 => (*(ushort*)pointer).ToString(),
-                    CorElementType.Char => (*(char*)pointer).ToString(),
-                    CorElementType.I4 => (*(int*)pointer).ToString(),
-                    CorElementType.U4 => (*(uint*)pointer).ToString(),
-                    CorElementType.R4 => (*(float*)pointer).ToString(),
-                    CorElementType.I8 => (*(long*)pointer).ToString(),
-                    CorElementType.U8 => (*(ulong*)pointer).ToString(),
-                    CorElementType.R8 => (*(double*)pointer).ToString(),
-                    CorElementType.Class => $"0x{*(nint*)pointer:X}",
-                    CorElementType.Object => $"0x{*(nint*)pointer:X}",
-                    CorElementType.Pointer => $"0x{*(nint*)pointer:X}",
-                    CorElementType.ValueType => Type.GetTypeFromHandle(definedTypeHandle).Name,
+                    CorElementType.I1 => (*(sbyte*)pvalue).ToString(),
+                    CorElementType.U1 => (*(byte*)pvalue).ToString(),
+                    CorElementType.I2 => (*(short*)pvalue).ToString(),
+                    CorElementType.U2 => (*(ushort*)pvalue).ToString(),
+                    CorElementType.Char => $"\'{*(char*)pvalue}\'",
+                    CorElementType.I4 => (*(int*)pvalue).ToString(),
+                    CorElementType.U4 => (*(uint*)pvalue).ToString(),
+                    CorElementType.R4 => (*(float*)pvalue).ToString(),
+                    CorElementType.I8 => (*(long*)pvalue).ToString(),
+                    CorElementType.U8 => (*(ulong*)pvalue).ToString(),
+                    CorElementType.R8 => (*(double*)pvalue).ToString(),
+                    CorElementType.Class => GetValueForPointerType(),
+                    CorElementType.Object => GetValueForPointerType(),
+                    CorElementType.Pointer => GetValueForPointerType(),
+                    CorElementType.ValueType => managedType.Name,
                     _ => throw new NotImplementedException()
                 };
 
                 return $"{name}({value})";
+
+                string GetValueForPointerType()
+                {
+                    var pointer = *(nint*)pvalue;
+                    if (pointer == default)
+                        return "null";
+
+                    return $"0x{*(nint*)pvalue:X}";
+                }
             }
 
-            public void AppendComment(string comment, ByteDataType type, int ordinal)
+            public void AppendDescription(string description, BytesDataType type, int ordinal)
             {
                 PrepareFormatting(type, ordinal);
-                TerminalWriter.WriteString(ref buffer, comment);
+                TerminalWriter.WriteString(ref buffer, description);
                 TerminalWriter.ResetFormatting(ref buffer);
                 TerminalWriter.Write(ref buffer, ' ');
             }
@@ -393,9 +543,9 @@ public unsafe static class ObjectDumper
                 TerminalWriter.ResetFormatting(ref buffer);
             }
 
-            void PrepareFormatting(ByteDataType type, int ordinal)
+            void PrepareFormatting(BytesDataType type, int ordinal)
             {
-                TerminalWriter.SetForeground(ref buffer, type.GetTerminalForegroundColor());
+                TerminalWriter.SetForeground(ref buffer, (TerminalColor)type);
 
                 if (ordinal % 2 == 0)
                     TerminalWriter.SetStyle(ref buffer, TerminalStyle.Inverse);
@@ -403,29 +553,18 @@ public unsafe static class ObjectDumper
             }
         }
 
-        enum LineState
+        enum State
         {
-            NotStarted,
             EmptyLine,
-            NotEmptyLine,
+            HasLabel,
+            NotEmpty,
             FullLine
         }
     }
 
-    internal enum ByteDataType
+    enum BytesDataType
     {
-        Padding,
-        Value
+        Padding = TerminalColor.Gray,
+        Value = TerminalColor.White
     }
-}
-
-static class ByteDataTypeExtensions
-{
-    public static TerminalColor GetTerminalForegroundColor(this ObjectDumper.ByteDataType type)
-        => type switch
-        {
-            ObjectDumper.ByteDataType.Value => TerminalColor.White,
-            ObjectDumper.ByteDataType.Padding => TerminalColor.Gray,
-            _ => throw new NotImplementedException()
-        };
 }
