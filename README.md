@@ -13,6 +13,8 @@ This is not necessary, but adding metadata processing can limit the dotnet versi
 from a major version to a minor one, so reflection was used for simplicity. \
 Otherwise, you need to add structures: Module, PEAssembly, MDImport and its vtable. \
 
+This could also serve as a better version [of this library](https://github.com/Yellow-Dog-Man/Verify.Marshaling)
+
 Sample
 ------
 <img width="1079" height="1016" alt="{E22B1DED-645C-4EA0-A661-CA0B377DB09D}" src="https://github.com/user-attachments/assets/a4f14034-21b0-42d8-8c20-8ebb28c3eac7" />
