@@ -50,7 +50,7 @@ public unsafe static class ObjectDumper
 
         var eeClass = methodTable->Class;
         var name = methodTable->GetName();
-        var size = methodTable->BaseSize - eeClass->BaseSizePadding - sizeof(nint);
+        var size = methodTable->BaseSize - eeClass->BaseSizePadding;
 
         terminal.Write("#000  "u8);
         terminal.SetStyle(TerminalStyle.Inverse);
